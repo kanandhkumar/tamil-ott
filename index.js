@@ -102,6 +102,16 @@ async function resolveProviderIds() {
     }
   }
   providerIdCache = result;
+
+  // Diagnostic: flag any provider we couldn't resolve a TMDB id for, so a
+  // "missing" platform in a catalog can be traced back to provider-id
+  // resolution (vs. just having sparse Tamil-tagged content on TMDB).
+  for (const target of TARGET_PROVIDERS) {
+    if (!result.movie[target.key] && !result.tv[target.key]) {
+      console.warn(`⚠️ No TMDB provider id found for "${target.key}" (movie or tv) — check provider_name match.`);
+    }
+  }
+
   return result;
 }
 
@@ -235,7 +245,8 @@ async function updateDailyList() {
       }
 
       combinedOtt.sort((a, b) => (b.popularity || 0) - (a.popularity || 0));
-      masterList[`${provider.key}OTT`] = await processItems(combinedOtt.slice(0, 45), "mixed");
+      console.log(`  ${provider.key}: movieId=${pMovId || "none"} tvId=${pTvId || "none"} rawCount=${combinedOtt.length}`);
+      masterList[`${provider.key}OTT`] = await processItems(combinedOtt.slice(0, 30), "mixed");
     }
 
     console.log(`✅ Update Successful! ${new Date().toLocaleTimeString()}`);
