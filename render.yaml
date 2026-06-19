@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: stremio-tamil-ott
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: TMDB_API_KEY
+        sync: false
