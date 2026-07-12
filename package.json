@@ -1,7 +1,7 @@
 {
   "name": "stremio-tamil-ott-addon",
-  "version": "8.8.0",
-  "description": "Stremio catalog addon mapping to premium Indian OTT platforms",
+  "version": "8.9.0",
+  "description": "Stremio catalog addon mapping to premium Indian OTT platforms, with Claude-verified weekly OTT release tracking",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
