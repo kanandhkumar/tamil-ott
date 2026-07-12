@@ -1,5 +1,6 @@
 const express = require("express");
 const fetch = require("node-fetch");
+const { fetchWeeklyOttReleases } = require("./claudeOttFetcher");
 const app = express();
 
 // ---------------------------------------------------------------------------
@@ -10,6 +11,7 @@ const PORT = process.env.PORT || 10000;
 const REGION = "IN";
 const LANGUAGE_FILTER = "ta"; // Tamil
 const SYNC_INTERVAL_MS = 12 * 60 * 60 * 1000;
+const WEEKLY_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000; // Claude+search calls cost money — sync once/day
 
 // Comprehensive target array including new premium digital channels.
 // `label` is the display name used on stream buttons; `catalogName` is the
@@ -30,6 +32,7 @@ const TARGET_PROVIDERS = [
 // array instead of being three separately-maintained if-chains.
 const CATALOGS = [
   { id: "tamil_cinema", type: "movie",  name: "🎬 Now In Cinemas",        listKey: "cinema" },
+  { id: "weekly_ott",   type: "movie",  name: "🆕 This Week's OTT Releases (India)", listKey: "weeklyOtt" },
   { id: "pure_tamil_m", type: "movie",  name: "New Tamil Movies (Pure)",  listKey: "tMovies" },
   { id: "pure_tamil_s", type: "series", name: "New Tamil Series (Pure)",  listKey: "tSeries" },
   ...TARGET_PROVIDERS.map((p) => ({
@@ -255,8 +258,22 @@ async function updateDailyList() {
   }
 }
 
+// Separate, slower-cadence sync for the Claude+web_search-backed weekly
+// releases row. Kept independent from updateDailyList() so a failure here
+// (e.g. missing ANTHROPIC_API_KEY, rate limit) never blocks the TMDB-only
+// catalogs from updating.
+async function updateWeeklyOttList() {
+  try {
+    masterList.weeklyOtt = await fetchWeeklyOttReleases();
+  } catch (e) {
+    console.error("Weekly OTT release sync failed:", e);
+  }
+}
+
 updateDailyList();
+updateWeeklyOttList();
 setInterval(updateDailyList, SYNC_INTERVAL_MS);
+setInterval(updateWeeklyOttList, WEEKLY_SYNC_INTERVAL_MS);
 
 // ---------------------------------------------------------------------------
 // Routes
@@ -266,9 +283,9 @@ app.get("/manifest.json", (req, res) => {
   res.setHeader("Cache-Control", "max-age=0, no-cache, no-store, must-revalidate");
   res.json({
     id: "com.anandh.tamil.v8.cinema",
-    version: "8.8.0",
+    version: "8.9.0",
     name: "Tamil Pro Max Ultra (v8)",
-    description: "14 Rows - Ultimate Combined Cinema, Streaming Platforms & Television Index",
+    description: "15 Rows - Ultimate Combined Cinema, Streaming Platforms, Weekly Releases & Television Index",
     resources: ["catalog", "stream"],
     types: ["movie", "series"],
     catalogs: CATALOGS.map((c) => ({
@@ -343,8 +360,9 @@ app.get("/stream/:type/:id.json", async (req, res) => {
 app.get("/health", (req, res) =>
   res.json({
     status: "ok",
-    version: "8.8.0",
+    version: "8.9.0",
     cinema: masterList.cinema.length,
+    weeklyOtt: masterList.weeklyOtt.length,
     tMovies: masterList.tMovies.length,
     netflix: masterList.netflixOTT.length,
     prime: masterList.primevideoOTT.length,
@@ -353,4 +371,4 @@ app.get("/health", (req, res) =>
   })
 );
 
-app.listen(PORT, () => console.log(`🚀 Tamil Pro Max Ultra 8.8.0 Live on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Tamil Pro Max Ultra 8.9.0 Live on port ${PORT}`));
