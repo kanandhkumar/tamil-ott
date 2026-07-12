@@ -45,7 +45,7 @@ Rules:
 - It is fine to return fewer than 10 results, or zero, if that's what the evidence supports.
 - Include both Tamil/regional-language titles and pan-India/Hollywood titles that released in India this week.
 
-Respond with ONLY a JSON array, no markdown fences, no commentary, in this exact shape:
+Your entire response must be a single JSON array and nothing else. Do not write any sentence before or after it — no "here is the list", no explanation, no notes. The first character of your response must be [ and the last character must be ]. Shape:
 [{"title": "...", "platform": "...", "release_date": "YYYY-MM-DD", "media_type": "movie|tv", "source_url": "..."}]
 
 If nothing can be verified, respond with exactly: []`;
@@ -79,8 +79,15 @@ If nothing can be verified, respond with exactly: []`;
 
   const cleaned = textBlocks.replace(/```json|```/g, "").trim();
 
+  // Claude sometimes prefaces the array with a sentence despite instructions
+  // ("Based on all the verified search results, here is...") even when told
+  // to return ONLY JSON. Rather than failing on that preamble, extract the
+  // first top-level [...] array from the text and parse just that.
+  const arrayMatch = cleaned.match(/\[[\s\S]*\]/);
+  const jsonSlice = arrayMatch ? arrayMatch[0] : cleaned;
+
   try {
-    const parsed = JSON.parse(cleaned);
+    const parsed = JSON.parse(jsonSlice);
     return Array.isArray(parsed) ? parsed : [];
   } catch (e) {
     console.error("Claude OTT fetch: failed to parse JSON response:", e.message, "\nRaw:", cleaned.slice(0, 500));
