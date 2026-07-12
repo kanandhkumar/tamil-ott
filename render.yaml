@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: stremio-tamil-ott
+    name: tamil-ott-addon
     env: node
     plan: free
     buildCommand: npm install
@@ -8,3 +8,8 @@ services:
     envVars:
       - key: TMDB_API_KEY
         sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: PORT
+        value: 10000
+    healthCheckPath: /health
