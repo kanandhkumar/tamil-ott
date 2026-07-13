@@ -30,7 +30,7 @@ const TARGET_PROVIDERS = [
 // array instead of being three separately-maintained if-chains.
 const CATALOGS = [
   { id: "tamil_cinema", type: "movie",  name: "🎬 Now In Cinemas",        listKey: "cinema" },
-  { id: "weekly_ott",   type: "movie",  name: "🆕 This Week's OTT Releases (India)", listKey: "weeklyOtt" },
+  { id: "weekly_ott",   type: "movie",  name: "🆕 Recent OTT Releases (India, 3 Wks)", listKey: "weeklyOtt" },
   { id: "pure_tamil_m", type: "movie",  name: "New Tamil Movies (Pure)",  listKey: "tMovies" },
   { id: "pure_tamil_s", type: "series", name: "New Tamil Series (Pure)",  listKey: "tSeries" },
   ...TARGET_PROVIDERS.map((p) => ({
@@ -250,9 +250,9 @@ async function updateDailyList() {
       masterList[`${provider.key}OTT`] = await processItems(combinedOtt.slice(0, 30), "mixed");
     }
 
-    // ----- This Week's OTT Releases (India): pure TMDB, no LLM -----
+    // ----- Recent OTT Releases (India, 3 Wks): pure TMDB, no LLM -----
     // For each target platform, ask TMDB for titles whose release/air date
-    // falls in the last 7 days AND that are available on that specific
+    // falls in the last 21 days AND that are available on that specific
     // platform (via with_watch_providers), rather than a generic discover
     // call with no platform tie. Restricted to Indian-language originals
     // (Tamil, Hindi, Telugu, Malayalam, Kannada) — without this filter,
@@ -260,7 +260,7 @@ async function updateDailyList() {
     // leak in, since TMDB's per-region provider data isn't a hard content
     // boundary. There's no hallucination risk either way since every item
     // is directly backed by TMDB data.
-    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+    const twentyOneDaysAgo = new Date(Date.now() - 21 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
     const indiaLangs = ["ta", "hi", "te", "ml", "kn"];
     let weeklyRaw = [];
 
@@ -275,7 +275,7 @@ async function updateDailyList() {
               watch_region: REGION,
               with_watch_providers: pMovId,
               with_original_language: lang,
-              "primary_release_date.gte": sevenDaysAgo,
+              "primary_release_date.gte": twentyOneDaysAgo,
               "primary_release_date.lte": today,
               sort_by: "primary_release_date.desc",
             }),
@@ -291,7 +291,7 @@ async function updateDailyList() {
               watch_region: REGION,
               with_watch_providers: pTvId,
               with_original_language: lang,
-              "first_air_date.gte": sevenDaysAgo,
+              "first_air_date.gte": twentyOneDaysAgo,
               "first_air_date.lte": today,
               sort_by: "first_air_date.desc",
             }),
@@ -326,7 +326,7 @@ async function updateDailyList() {
       await delay(15);
     }
     masterList.weeklyOtt = weeklyMetas;
-    console.log(`  weeklyOtt: ${weeklyMetas.length} item(s) across all platforms in the last 7 days`);
+    console.log(`  weeklyOtt: ${weeklyMetas.length} item(s) across all platforms in the last 21 days`);
 
     console.log(`✅ Update Successful! ${new Date().toLocaleTimeString()}`);
   } catch (e) {
