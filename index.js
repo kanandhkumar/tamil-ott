@@ -254,47 +254,53 @@ async function updateDailyList() {
     // For each target platform, ask TMDB for titles whose release/air date
     // falls in the last 7 days AND that are available on that specific
     // platform (via with_watch_providers), rather than a generic discover
-    // call with no platform tie. This is a reasonable proxy for "just
-    // dropped on OTT" — TMDB's release-date field doesn't always mean
-    // "digital release on this exact platform," so it can occasionally
-    // include a title that released elsewhere first, but there's no
-    // hallucination risk since every item is directly backed by TMDB data.
+    // call with no platform tie. Restricted to Indian-language originals
+    // (Tamil, Hindi, Telugu, Malayalam, Kannada) — without this filter,
+    // watch_region alone lets global catalog content (US docs, anime, etc.)
+    // leak in, since TMDB's per-region provider data isn't a hard content
+    // boundary. There's no hallucination risk either way since every item
+    // is directly backed by TMDB data.
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+    const indiaLangs = ["ta", "hi", "te", "ml", "kn"];
     let weeklyRaw = [];
 
     for (const provider of TARGET_PROVIDERS) {
       const pMovId = ids.movie[provider.key];
       const pTvId = ids.tv[provider.key];
 
-      if (pMovId) {
-        const recentMovies = await fetchAllPages(
-          tmdbUrl("discover/movie", {
-            watch_region: REGION,
-            with_watch_providers: pMovId,
-            "primary_release_date.gte": sevenDaysAgo,
-            "primary_release_date.lte": today,
-            sort_by: "primary_release_date.desc",
-          }),
-          1
-        );
-        weeklyRaw = weeklyRaw.concat(
-          recentMovies.map((item) => ({ ...item, media_type: "movie", platformLabel: provider.catalogName }))
-        );
-      }
-      if (pTvId) {
-        const recentSeries = await fetchAllPages(
-          tmdbUrl("discover/tv", {
-            watch_region: REGION,
-            with_watch_providers: pTvId,
-            "first_air_date.gte": sevenDaysAgo,
-            "first_air_date.lte": today,
-            sort_by: "first_air_date.desc",
-          }),
-          1
-        );
-        weeklyRaw = weeklyRaw.concat(
-          recentSeries.map((item) => ({ ...item, media_type: "tv", platformLabel: provider.catalogName }))
-        );
+      for (const lang of indiaLangs) {
+        if (pMovId) {
+          const recentMovies = await fetchAllPages(
+            tmdbUrl("discover/movie", {
+              watch_region: REGION,
+              with_watch_providers: pMovId,
+              with_original_language: lang,
+              "primary_release_date.gte": sevenDaysAgo,
+              "primary_release_date.lte": today,
+              sort_by: "primary_release_date.desc",
+            }),
+            1
+          );
+          weeklyRaw = weeklyRaw.concat(
+            recentMovies.map((item) => ({ ...item, media_type: "movie", platformLabel: provider.catalogName }))
+          );
+        }
+        if (pTvId) {
+          const recentSeries = await fetchAllPages(
+            tmdbUrl("discover/tv", {
+              watch_region: REGION,
+              with_watch_providers: pTvId,
+              with_original_language: lang,
+              "first_air_date.gte": sevenDaysAgo,
+              "first_air_date.lte": today,
+              sort_by: "first_air_date.desc",
+            }),
+            1
+          );
+          weeklyRaw = weeklyRaw.concat(
+            recentSeries.map((item) => ({ ...item, media_type: "tv", platformLabel: provider.catalogName }))
+          );
+        }
       }
     }
 
