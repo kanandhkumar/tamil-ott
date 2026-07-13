@@ -21,7 +21,7 @@ const fetch = require("node-fetch");
 
 const GEMINI_KEY = process.env.GEMINI_API_KEY;
 const TMDB_KEY = process.env.TMDB_API_KEY;
-const GEMINI_MODEL = "gemini-flash-latest"; // alias auto-points to current Flash model, avoiding version-pinned 404s
+const GEMINI_MODEL = "gemini-2.5-flash-lite"; // more generous free-tier quota than full Flash
 const REGION = "IN";
 
 const PLATFORMS = [
