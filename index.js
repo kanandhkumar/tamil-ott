@@ -1,6 +1,6 @@
 const express = require("express");
 const fetch = require("node-fetch");
-const { fetchWeeklyOttReleases } = require("./claudeOttFetcher");
+const { fetchWeeklyOttReleases } = require("./geminiOttFetcher");
 const app = express();
 
 // ---------------------------------------------------------------------------
@@ -264,7 +264,7 @@ async function updateDailyList() {
 // catalogs from updating.
 async function updateWeeklyOttList() {
   try {
-    masterList.weeklyOtt = await fetchWeeklyOttReleases();
+    masterList.weeklyOtt = await fetchWeeklyOttReleases(masterList.weeklyOtt);
   } catch (e) {
     console.error("Weekly OTT release sync failed:", e);
   }
