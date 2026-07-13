@@ -1,6 +1,5 @@
 const express = require("express");
 const fetch = require("node-fetch");
-const { fetchWeeklyOttReleases } = require("./geminiOttFetcher");
 const app = express();
 
 // ---------------------------------------------------------------------------
@@ -11,7 +10,6 @@ const PORT = process.env.PORT || 10000;
 const REGION = "IN";
 const LANGUAGE_FILTER = "ta"; // Tamil
 const SYNC_INTERVAL_MS = 12 * 60 * 60 * 1000;
-const WEEKLY_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000; // Claude+search calls cost money — sync once/day
 
 // Comprehensive target array including new premium digital channels.
 // `label` is the display name used on stream buttons; `catalogName` is the
@@ -252,28 +250,86 @@ async function updateDailyList() {
       masterList[`${provider.key}OTT`] = await processItems(combinedOtt.slice(0, 30), "mixed");
     }
 
+    // ----- This Week's OTT Releases (India): pure TMDB, no LLM -----
+    // For each target platform, ask TMDB for titles whose release/air date
+    // falls in the last 7 days AND that are available on that specific
+    // platform (via with_watch_providers), rather than a generic discover
+    // call with no platform tie. This is a reasonable proxy for "just
+    // dropped on OTT" — TMDB's release-date field doesn't always mean
+    // "digital release on this exact platform," so it can occasionally
+    // include a title that released elsewhere first, but there's no
+    // hallucination risk since every item is directly backed by TMDB data.
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+    let weeklyRaw = [];
+
+    for (const provider of TARGET_PROVIDERS) {
+      const pMovId = ids.movie[provider.key];
+      const pTvId = ids.tv[provider.key];
+
+      if (pMovId) {
+        const recentMovies = await fetchAllPages(
+          tmdbUrl("discover/movie", {
+            watch_region: REGION,
+            with_watch_providers: pMovId,
+            "primary_release_date.gte": sevenDaysAgo,
+            "primary_release_date.lte": today,
+            sort_by: "primary_release_date.desc",
+          }),
+          1
+        );
+        weeklyRaw = weeklyRaw.concat(
+          recentMovies.map((item) => ({ ...item, media_type: "movie", platformLabel: provider.catalogName }))
+        );
+      }
+      if (pTvId) {
+        const recentSeries = await fetchAllPages(
+          tmdbUrl("discover/tv", {
+            watch_region: REGION,
+            with_watch_providers: pTvId,
+            "first_air_date.gte": sevenDaysAgo,
+            "first_air_date.lte": today,
+            sort_by: "first_air_date.desc",
+          }),
+          1
+        );
+        weeklyRaw = weeklyRaw.concat(
+          recentSeries.map((item) => ({ ...item, media_type: "tv", platformLabel: provider.catalogName }))
+        );
+      }
+    }
+
+    // De-dupe (a title can appear on multiple platforms) and sort newest first
+    const seen = new Map();
+    for (const item of weeklyRaw) {
+      const key = `${item.media_type}:${item.id}`;
+      if (!seen.has(key)) seen.set(key, item);
+    }
+    const weeklyDeduped = Array.from(seen.values()).sort((a, b) => {
+      const da = a.media_type === "movie" ? a.release_date : a.first_air_date;
+      const db = b.media_type === "movie" ? b.release_date : b.first_air_date;
+      return new Date(db || 0) - new Date(da || 0);
+    });
+
+    const weeklyMetas = [];
+    for (const item of weeklyDeduped.slice(0, 40)) {
+      const meta = await convertToPlayable(item, item.media_type);
+      if (meta) {
+        meta.name = `${meta.name} 🆕 [${item.platformLabel}]`;
+        weeklyMetas.push(meta);
+      }
+      await delay(15);
+    }
+    masterList.weeklyOtt = weeklyMetas;
+    console.log(`  weeklyOtt: ${weeklyMetas.length} item(s) across all platforms in the last 7 days`);
+
     console.log(`✅ Update Successful! ${new Date().toLocaleTimeString()}`);
   } catch (e) {
     console.error("Sync failed", e);
   }
 }
 
-// Separate, slower-cadence sync for the Claude+web_search-backed weekly
-// releases row. Kept independent from updateDailyList() so a failure here
-// (e.g. missing ANTHROPIC_API_KEY, rate limit) never blocks the TMDB-only
-// catalogs from updating.
-async function updateWeeklyOttList() {
-  try {
-    masterList.weeklyOtt = await fetchWeeklyOttReleases(masterList.weeklyOtt);
-  } catch (e) {
-    console.error("Weekly OTT release sync failed:", e);
-  }
-}
-
 updateDailyList();
-updateWeeklyOttList();
 setInterval(updateDailyList, SYNC_INTERVAL_MS);
-setInterval(updateWeeklyOttList, WEEKLY_SYNC_INTERVAL_MS);
 
 // ---------------------------------------------------------------------------
 // Routes
