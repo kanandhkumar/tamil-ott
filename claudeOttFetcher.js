@@ -1,29 +1,34 @@
 const fetch = require("node-fetch");
 
 // ---------------------------------------------------------------------------
-// Claude-powered "Weekly OTT Releases (India)" fetcher.
+// Gemini-powered "Weekly OTT Releases (India)" fetcher.
 //
-// Replaces the previous Gemini-based fetcher. Gemini's Search-grounded output
-// was hallucinating titles/platforms/dates that didn't check out. This module
-// instead:
-//   1. Asks Claude (web_search tool enabled) to report ONLY titles it can
-//      directly cite from a search result, in strict JSON.
-//   2. Cross-checks every returned title against TMDB (title + rough date
-//      match) before it's allowed into the catalog. Anything Claude claims
-//      that TMDB can't corroborate is dropped rather than trusted blindly.
+// Uses Google's free-tier Gemini API (with Search grounding) instead of
+// Claude, since Claude API credits were burning fast — largely because this
+// module was firing on every Render redeploy/restart, not just once a day.
 //
-// This keeps two independently-unreliable sources checking each other,
-// rather than trusting either one's output verbatim.
+// Two safeguards keep this reliable and cheap:
+//   1. TMDB verification: every title Gemini reports is cross-checked
+//      against TMDB (title + rough date match) before it's allowed into the
+//      catalog. Anything Gemini claims that TMDB can't corroborate is
+//      dropped rather than trusted blindly. This is what fixes hallucination
+//      regardless of which LLM is used.
+//   2. Once-per-day gating: a timestamp is kept in memory so redeploys/
+//      restarts within the same day do NOT trigger a fresh Gemini call.
+//      Render free tier spins down on inactivity, so without this, every
+//      wake-up was burning a call.
 // ---------------------------------------------------------------------------
 
-const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
+const GEMINI_KEY = process.env.GEMINI_API_KEY;
 const TMDB_KEY = process.env.TMDB_API_KEY;
-const CLAUDE_MODEL = "claude-sonnet-4-6";
+const GEMINI_MODEL = "gemini-2.5-flash"; // free-tier friendly; swap to -pro if quota allows
 const REGION = "IN";
 
 const PLATFORMS = [
   "Netflix", "Amazon Prime Video", "JioHotstar", "ZEE5", "Sun NXT", "SonyLIV", "Aha Video",
 ];
+
+let lastFetchDateStr = null; // e.g. "2026-07-13" — guards against redeploy-triggered re-fetches
 
 function tmdbUrl(path, params = {}) {
   const qs = new URLSearchParams({ api_key: TMDB_KEY, ...params }).toString();
@@ -31,9 +36,9 @@ function tmdbUrl(path, params = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// Step 1: Ask Claude, with web_search, for this week's releases.
+// Step 1: Ask Gemini, with Google Search grounding, for this week's releases.
 // ---------------------------------------------------------------------------
-async function fetchClaudeCandidates() {
+async function fetchGeminiCandidates() {
   const today = new Date().toISOString().split("T")[0];
   const prompt = `Search the web for movies and TV series/shows that released on OTT streaming platforms in India (${PLATFORMS.join(
     ", "
@@ -50,39 +55,35 @@ Your entire response must be a single JSON array and nothing else. Do not write 
 
 If nothing can be verified, respond with exactly: []`;
 
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_KEY}`;
+
+  const response = await fetch(url, {
     method: "POST",
-    headers: {
-      "x-api-key": ANTHROPIC_KEY,
-      "anthropic-version": "2023-06-01",
-      "Content-Type": "application/json",
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: CLAUDE_MODEL,
-      max_tokens: 2000,
-      messages: [{ role: "user", content: prompt }],
-      tools: [{ type: "web_search_20250305", name: "web_search" }],
+      contents: [{ parts: [{ text: prompt }] }],
+      tools: [{ google_search: {} }],
+      generationConfig: { temperature: 0.1 },
     }),
   });
 
   const data = await response.json();
 
   if (data.error) {
-    console.error("Claude OTT fetch error:", data.error);
+    console.error("Gemini OTT fetch error:", data.error);
     return [];
   }
 
-  const textBlocks = (data.content || [])
-    .filter((b) => b.type === "text")
-    .map((b) => b.text)
-    .join("\n");
+  const candidate = data.candidates && data.candidates[0];
+  const textBlocks = candidate && candidate.content && candidate.content.parts
+    ? candidate.content.parts.map((p) => p.text || "").join("\n")
+    : "";
 
   const cleaned = textBlocks.replace(/```json|```/g, "").trim();
 
-  // Claude sometimes prefaces the array with a sentence despite instructions
-  // ("Based on all the verified search results, here is...") even when told
-  // to return ONLY JSON. Rather than failing on that preamble, extract the
-  // first top-level [...] array from the text and parse just that.
+  // Gemini, like Claude, sometimes prefaces the array with a sentence
+  // despite instructions. Extract the first top-level [...] array rather
+  // than assuming the whole response body is clean JSON.
   const arrayMatch = cleaned.match(/\[[\s\S]*\]/);
   const jsonSlice = arrayMatch ? arrayMatch[0] : cleaned;
 
@@ -90,15 +91,15 @@ If nothing can be verified, respond with exactly: []`;
     const parsed = JSON.parse(jsonSlice);
     return Array.isArray(parsed) ? parsed : [];
   } catch (e) {
-    console.error("Claude OTT fetch: failed to parse JSON response:", e.message, "\nRaw:", cleaned.slice(0, 500));
+    console.error("Gemini OTT fetch: failed to parse JSON response:", e.message, "\nRaw:", cleaned.slice(0, 500));
     return [];
   }
 }
 
 // ---------------------------------------------------------------------------
-// Step 2: Verify each Claude-reported candidate against TMDB.
+// Step 2: Verify each Gemini-reported candidate against TMDB.
 // A candidate only survives if TMDB has a matching title with a release/
-// air date within a loose window of what Claude claimed (+/- 21 days, to
+// air date within a loose window of what Gemini claimed (+/- 21 days, to
 // allow for regional release-date discrepancies without accepting wildly
 // wrong claims).
 // ---------------------------------------------------------------------------
@@ -125,7 +126,6 @@ async function verifyAgainstTmdb(candidate) {
       if (isNaN(rDate.getTime())) continue;
 
       if (!claimedValid) {
-        // No usable claimed date to compare against; accept the top TMDB match.
         best = r;
         break;
       }
@@ -140,7 +140,7 @@ async function verifyAgainstTmdb(candidate) {
     if (!best) return null;
     if (claimedValid && bestDiffDays > 21) {
       console.warn(
-        `  ⚠️ Rejected "${candidate.title}": TMDB date too far from Claude's claimed date (${bestDiffDays.toFixed(
+        `  ⚠️ Rejected "${candidate.title}": TMDB date too far from Gemini's claimed date (${bestDiffDays.toFixed(
           0
         )} days off)`
       );
@@ -156,7 +156,6 @@ async function verifyAgainstTmdb(candidate) {
 
 // ---------------------------------------------------------------------------
 // Step 3: Convert a verified TMDB item into the addon's standard meta shape.
-// Mirrors convertToPlayable() in index.js so the shape is identical.
 // ---------------------------------------------------------------------------
 async function toMeta({ tmdbItem, mediaType, candidate }) {
   try {
@@ -188,16 +187,25 @@ async function toMeta({ tmdbItem, mediaType, candidate }) {
 
 // ---------------------------------------------------------------------------
 // Public entry point: returns a verified, ready-to-serve meta array.
+// Gated to run at most once per calendar day, regardless of how many times
+// the process restarts/redeploys within that day.
 // ---------------------------------------------------------------------------
-async function fetchWeeklyOttReleases() {
-  if (!ANTHROPIC_KEY) {
-    console.warn("⚠️ ANTHROPIC_API_KEY not set — skipping weekly OTT releases fetch.");
-    return [];
+async function fetchWeeklyOttReleases(previousList = []) {
+  const todayStr = new Date().toISOString().split("T")[0];
+
+  if (lastFetchDateStr === todayStr) {
+    console.log(`  ⏭️  Weekly OTT releases already fetched today (${todayStr}) — skipping Gemini call, keeping existing list.`);
+    return previousList;
   }
 
-  console.log("🔎 Fetching weekly OTT releases via Claude + web_search...");
-  const candidates = await fetchClaudeCandidates();
-  console.log(`  Claude returned ${candidates.length} candidate(s) before verification.`);
+  if (!GEMINI_KEY) {
+    console.warn("⚠️ GEMINI_API_KEY not set — skipping weekly OTT releases fetch.");
+    return previousList;
+  }
+
+  console.log("🔎 Fetching weekly OTT releases via Gemini + Google Search...");
+  const candidates = await fetchGeminiCandidates();
+  console.log(`  Gemini returned ${candidates.length} candidate(s) before verification.`);
 
   const verified = [];
   for (const candidate of candidates) {
@@ -209,6 +217,11 @@ async function fetchWeeklyOttReleases() {
   }
 
   console.log(`  ✅ ${verified.length} of ${candidates.length} candidate(s) verified against TMDB and kept.`);
+
+  // Only mark today as "done" once the call actually completed — this
+  // prevents redeploy-spam while still allowing tomorrow's fetch normally.
+  lastFetchDateStr = todayStr;
+
   return verified;
 }
 
